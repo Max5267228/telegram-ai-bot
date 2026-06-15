@@ -1,6 +1,7 @@
 import { Bot, InputFile } from "grammy";
 import { getHistory, addMessage, clearHistory } from "./conversation.js";
 import { chat, transcribeAudio, generateImage, analyzeImage } from "./ai.js";
+import { trackMessage, getStats } from "./stats.js";
 import https from "https";
 import http from "http";
 
@@ -27,6 +28,12 @@ async function getTgFileUrl(fileId: string): Promise<{ url: string; path: string
   return { url: `https://api.telegram.org/file/bot${token}/${path}`, path };
 }
 
+function getUserName(ctx: { from?: { first_name?: string; last_name?: string; username?: string } }): string {
+  const f = ctx.from;
+  if (!f) return "Неизвестный";
+  return [f.first_name, f.last_name].filter(Boolean).join(" ") || f.username || "Неизвестный";
+}
+
 // /start
 bot.command("start", async (ctx) => {
   const name = ctx.from?.first_name || "друг";
@@ -38,6 +45,7 @@ bot.command("start", async (ctx) => {
     `🎨 /image описание — генерирую картинки\n` +
     `🎤 Понимаю голосовые сообщения\n` +
     `🖼 Анализирую фотографии\n` +
+    `📊 /stats — статистика бота\n` +
     `🗑 /clear — очищаю историю диалога\n\n` +
     `В группах упомяни меня @${me.username} 🚀`
   );
@@ -49,6 +57,7 @@ bot.command("help", async (ctx) => {
     `📖 Команды:\n` +
     `/start — Приветствие\n` +
     `/image описание — Сгенерировать изображение\n` +
+    `/stats — Статистика бота\n` +
     `/clear — Очистить историю диалога\n\n` +
     `Просто пиши — отвечу на всё! ✨`
   );
@@ -60,6 +69,11 @@ bot.command("clear", async (ctx) => {
   await ctx.reply("🗑 История очищена. Начнём заново!");
 });
 
+// /stats
+bot.command("stats", async (ctx) => {
+  await ctx.reply(getStats());
+});
+
 // /image
 bot.command("image", async (ctx) => {
   const prompt = ctx.match?.trim();
@@ -67,6 +81,10 @@ bot.command("image", async (ctx) => {
     await ctx.reply("Укажи описание: /image красивый закат над горами");
     return;
   }
+  const userId = ctx.from?.id ?? 0;
+  const name = getUserName(ctx);
+  trackMessage(userId, name, "image");
+
   const status = await ctx.reply("🎨 Генерирую изображение...");
   try {
     const buf = await generateImage(prompt);
@@ -84,6 +102,10 @@ bot.on(["message:voice", "message:audio"], async (ctx) => {
   const chatId = ctx.chat.id;
   const fileId = ctx.message.voice?.file_id ?? ctx.message.audio?.file_id;
   if (!fileId) return;
+
+  const userId = ctx.from?.id ?? 0;
+  const name = getUserName(ctx);
+  trackMessage(userId, name, "voice");
 
   const status = await ctx.reply("🎤 Транскрибирую...");
   try {
@@ -119,6 +141,11 @@ bot.on("message:photo", async (ctx) => {
   const chatId = ctx.chat.id;
   const photos = ctx.message.photo;
   const best = photos[photos.length - 1];
+
+  const userId = ctx.from?.id ?? 0;
+  const name = getUserName(ctx);
+  trackMessage(userId, name, "photo");
+
   const status = await ctx.reply("🖼 Анализирую изображение...");
   try {
     const { url, path } = await getTgFileUrl(best.file_id);
@@ -145,7 +172,6 @@ bot.on("message:text", async (ctx) => {
   let text = ctx.message.text;
   if (text.startsWith("/")) return;
 
-  // In groups — only respond if mentioned or replied to
   const isGroup = ctx.chat.type === "group" || ctx.chat.type === "supergroup";
   if (isGroup) {
     const me = await bot.api.getMe();
@@ -156,6 +182,10 @@ bot.on("message:text", async (ctx) => {
   }
 
   if (!text) return;
+
+  const userId = ctx.from?.id ?? 0;
+  const name = getUserName(ctx);
+  trackMessage(userId, name, "text");
 
   await ctx.replyWithChatAction("typing");
   const typingInterval = setInterval(() => ctx.replyWithChatAction("typing").catch(() => {}), 4000);
